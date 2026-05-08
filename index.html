@@ -1,0 +1,170 @@
+// 🚗 UBER-STYLE SINGLE FILE SYSTEM (SIMULATION MVP)
+
+import express from "express";
+import TelegramBot from "node-telegram-bot-api";
+
+const app = express();
+app.use(express.json());
+
+// ===============================
+// 🗄️ "DATABASE" (in-memory)
+// ===============================
+let drivers = {};
+let orders = {};
+let orderId = 1;
+
+// ===============================
+// 🤖 TELEGRAM DRIVER BOT
+// ===============================
+const BOT_TOKEN = "PASTE_TOKEN_HERE";
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// ===============================
+// 🚀 DRIVER LOGIN
+// ===============================
+bot.onText(/\/start/, (msg) => {
+  const id = msg.chat.id;
+
+  drivers[id] = {
+    id,
+    lat: 40.0 + Math.random(),
+    lng: -74.0 + Math.random(),
+    activeOrders: 0
+  };
+
+  bot.sendMessage(id,
+`🚗 DRIVER ONLINE
+
+Commands:
+/location - update location
+/orders - view assigned jobs`);
+});
+
+// ===============================
+// 📍 LOCATION UPDATE
+// ===============================
+bot.onText(/\/location/, (msg) => {
+  bot.sendMessage(msg.chat.id, "Send: lat,lng");
+
+  bot.once("message", (m) => {
+    const [lat, lng] = m.text.split(",");
+
+    if (!drivers[msg.chat.id]) return;
+
+    drivers[msg.chat.id].lat = parseFloat(lat);
+    drivers[msg.chat.id].lng = parseFloat(lng);
+
+    bot.sendMessage(msg.chat.id, "📍 Location updated");
+  });
+});
+
+// ===============================
+// 📦 VIEW ORDERS
+// ===============================
+bot.onText(/\/orders/, (msg) => {
+  const id = msg.chat.id;
+
+  const mine = Object.values(orders).filter(o => o.driverId === id);
+
+  bot.sendMessage(id,
+mine.length
+? mine.map(o => `#${o.id} → ${o.status}`).join("\n")
+: "No assigned orders");
+});
+
+// ===============================
+// 🧠 DISPATCH ENGINE
+// ===============================
+function assignOrder(order) {
+  let bestDriver = null;
+  let bestScore = Infinity;
+
+  for (const d of Object.values(drivers)) {
+    const distance =
+      Math.abs(d.lat - order.lat) +
+      Math.abs(d.lng - order.lng);
+
+    const score = distance + d.activeOrders * 2;
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestDriver = d;
+    }
+  }
+
+  if (bestDriver) {
+    order.driverId = bestDriver.id;
+    order.status = "assigned";
+    bestDriver.activeOrders++;
+
+    bot.sendMessage(bestDriver.id,
+`📦 NEW ORDER ASSIGNED
+Order #${order.id}`);
+  }
+}
+
+// ===============================
+// 📦 CREATE ORDER API
+// ===============================
+app.post("/order", (req, res) => {
+  const id = orderId++;
+
+  const order = {
+    id,
+    lat: req.body.lat || 40 + Math.random(),
+    lng: req.body.lng || -74 + Math.random(),
+    status: "pending",
+    driverId: null
+  };
+
+  orders[id] = order;
+
+  assignOrder(order);
+
+  res.json({ success: true, order });
+});
+
+// ===============================
+// 🚗 DRIVER LOCATION UPDATE API
+// ===============================
+app.post("/driver/location", (req, res) => {
+  const { id, lat, lng } = req.body;
+
+  if (!drivers[id]) drivers[id] = { id, activeOrders: 0 };
+
+  drivers[id].lat = lat;
+  drivers[id].lng = lng;
+
+  res.json({ ok: true });
+});
+
+// ===============================
+// 📊 DASHBOARD (VERY SIMPLE)
+// ===============================
+app.get("/", (req, res) => {
+  res.send(`
+  <h1>🚗 UBER-STYLE DASHBOARD</h1>
+
+  <h2>📦 Orders</h2>
+  ${Object.values(orders).map(o =>
+    `<p>#${o.id} - ${o.status} (driver: ${o.driverId || "none"})</p>`
+  ).join("")}
+
+  <h2>🚗 Drivers</h2>
+  ${Object.values(drivers).map(d =>
+    `<p>${d.id} → ${d.lat.toFixed(2)}, ${d.lng.toFixed(2)}</p>`
+  ).join("")}
+
+  <form method="POST" action="/order">
+    <h3>Create Order</h3>
+    <button>Generate Random Order</button>
+  </form>
+  `);
+});
+
+// ===============================
+// 🚀 START SERVER
+// ===============================
+app.listen(3000, () => {
+  console.log("🚗 Uber-style system running on http://localhost:3000");
+});
